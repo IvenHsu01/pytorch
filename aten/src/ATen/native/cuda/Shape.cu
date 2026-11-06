@@ -12,6 +12,8 @@
 #include <ATen/Dispatch_v2.h>
 #include <c10/core/MemoryFormat.h>
 
+#include <cstdlib>
+
 #ifndef AT_PER_OPERATOR_HEADERS
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
@@ -659,6 +661,11 @@ TORCH_IMPL_FUNC(cat_out_cuda)
       // gfx1201 L2 hit 84% -> 10%, 9.7x slower; RTX 5090 1.8x slower). Split such a cat along
       // dim 0 so each launch covers at most kCatSplitElems elements of its largest input.
       constexpr int64_t kCatSplitElems = int64_t{32} << 20;
+      // TEST ONLY (A/B in one build): TORCH_CAT_SPLIT=0 disables the split. Not for upstream.
+      static const bool cat_split_enabled = [] {
+        const char* e = std::getenv("TORCH_CAT_SPLIT");
+        return !(e && e[0] == '0');
+      }();
       const int64_t nrows = result.size(0);
       int64_t row_elems = 0;
       for (const Tensor& t : materialized) {
@@ -666,8 +673,8 @@ TORCH_IMPL_FUNC(cat_out_cuda)
           row_elems = std::max(row_elems, t.numel() / t.size(0));
         }
       }
-      if (dim != 0 && nrows > 1 && row_elems > 0 && row_elems * nrows > kCatSplitElems &&
-          result.is_contiguous()) {
+      if (cat_split_enabled && dim != 0 && nrows > 1 && row_elems > 0 &&
+          row_elems * nrows > kCatSplitElems && result.is_contiguous()) {
         const int64_t rows = std::max<int64_t>(1, kCatSplitElems / row_elems);
         std::vector<Tensor> parts;
         parts.reserve(materialized.size());
